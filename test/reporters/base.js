@@ -1,3 +1,5 @@
+var assert = require('assert');
+
 var Base   = require('../../lib/reporters/base')
   , Assert = require('assert').AssertionError;
 
@@ -127,6 +129,47 @@ describe('Base reporter', function () {
     errOut.should.match(/test/);
     errOut.should.match(/\- actual/);
     errOut.should.match(/\+ expected/);
+  });
+
+  it('should stringify Object.create(null)', function () {
+    var err = new Error('test'),
+      errOut;
+
+    err.actual = Object.create(null);
+    err.actual.hasOwnProperty = 1;
+    err.expected = Object.create(null);
+    err.expected.hasOwnProperty = 2;
+    err.showDiff = true;
+    var test = makeTest(err);
+
+    Base.list([test]);
+
+    errOut = stdout.join('\n');
+    errOut.should.match(/"hasOwnProperty"/);
+    errOut.should.match(/test/);
+    errOut.should.match(/\- actual/);
+    errOut.should.match(/\+ expected/);
+  });
+
+  it('should handle error messages that are not strings', function () {
+    var errOut;
+
+    try {
+      assert(false, true);
+    } catch (err) {
+      err.actual = false;
+      err.expected = true;
+      err.showDiff = true;
+      var test = makeTest(err);
+
+      Base.list([test]);
+
+      errOut = stdout.join('\n');
+      errOut.should.match(/\+true/);
+      errOut.should.match(/\-false/);
+      errOut.should.match(/\- actual/);
+      errOut.should.match(/\+ expected/);
+    }
   });
 
   it('should remove message from stack', function () {
