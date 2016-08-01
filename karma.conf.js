@@ -1,6 +1,12 @@
 'use strict';
 
+var fs = require('fs');
+var path = require('path');
+var mkdirp = require('mkdirp');
+var baseBundleDirpath = path.join(__dirname, '.karma');
+
 module.exports = function(config) {
+  var bundleDirpath;
   var cfg = {
     frameworks: [
       'browserify',
@@ -25,9 +31,16 @@ module.exports = function(config) {
       debug: true,
       configure: function configure(b) {
         b.ignore('glob')
-          .ignore('jade')
+          .ignore('fs')
+          .ignore('path')
           .ignore('supports-color')
-          .exclude('./lib-cov/mocha');
+          .on('bundled', function(err, content) {
+            if (!err && bundleDirpath) {
+              // write bundle to directory for debugging
+              fs.writeFileSync(path.join(bundleDirpath,
+                'bundle.' + Date.now() + '.js'), content);
+            }
+          });
       }
     },
     reporters: ['spec'],
@@ -47,6 +60,7 @@ module.exports = function(config) {
     console.error('CI mode enabled');
     if (env.TRAVIS) {
       console.error('Travis-CI detected');
+      bundleDirpath = path.join(baseBundleDirpath, process.env.TRAVIS_BUILD_ID);
       if (env.SAUCE_USERNAME && env.SAUCE_ACCESS_KEY) {
         // correlate build/tunnel with Travis
         sauceConfig = {
@@ -54,14 +68,16 @@ module.exports = function(config) {
           + ' (' + env.TRAVIS_BUILD_ID + ')',
           tunnelIdentifier: env.TRAVIS_JOB_NUMBER
         };
-        console.error('Configured SauceLabs')
+        console.error('Configured SauceLabs');
       } else {
         console.error('No SauceLabs credentials present');
       }
     } else if (env.APPVEYOR) {
       console.error('AppVeyor detected');
+      bundleDirpath = path.join(baseBundleDirpath, process.env.APPVEYOR_BUILD_ID);
     } else {
-      console.error('Local/unknown environment detected')
+      console.error('Local/unknown environment detected');
+      bundleDirpath = path.join(baseBundleDirpath, 'local');
       // don't need to run sauce from appveyor b/c travis does it.
       if (!(env.SAUCE_USERNAME || env.SAUCE_ACCESS_KEY)) {
         console.error('No SauceLabs credentials present');
@@ -72,6 +88,7 @@ module.exports = function(config) {
         console.error('Configured SauceLabs');
       }
     }
+    mkdirp.sync(bundleDirpath);
   } else {
     console.error('CI mode disabled');
   }
@@ -110,6 +127,12 @@ function addSauceTests(cfg) {
       browserName: 'internet explorer',
       platform: 'Windows 7',
       version: '8.0'
+    },
+    ie7: {
+      base: 'SauceLabs',
+      browserName: 'internet explorer',
+      platform: 'Windows XP',
+      version: '7.0'
     },
     chrome: {
       base: 'SauceLabs',
