@@ -5251,10 +5251,10 @@ function filterOnly(suite) {
     // Otherwise, do not run any of the tests in this suite.
     suite.tests = [];
     suite._onlySuites.forEach(function(onlySuite) {
-      // If there are other `only` tests/suites nested in the current `only` suite, then filter the current suite.
+      // If there are other `only` tests/suites nested in the current `only` suite, then filter that `only` suite.
       // Otherwise, all of the tests on this `only` suite should be run, so don't filter it.
       if (hasOnly(onlySuite)) {
-        filterOnly(suite);
+        filterOnly(onlySuite);
       }
     });
     // Run the `only` suites, as well as any other suites that have `only` tests/suites as descendants.
@@ -9316,7 +9316,7 @@ function objectToString(o) {
   /*global module */
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = JsDiff;
-  } else if (typeof define === 'function' && define.amd) {
+  } else if (false) {
     /*global define */
     define([], function() { return JsDiff; });
   } else if (typeof global.JsDiff === 'undefined') {
@@ -10078,7 +10078,7 @@ module.exports = Array.isArray || function (arr) {
 ;(function () {
   // Detect the `define` function exposed by asynchronous module loaders. The
   // strict `define` check is necessary for compatibility with `r.js`.
-  var isLoader = typeof define === "function" && define.amd;
+  var isLoader = false;
 
   // A set of types used to distinguish objects from primitives.
   var objectTypes = {
