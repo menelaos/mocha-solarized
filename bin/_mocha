@@ -358,8 +358,25 @@ if (!args.length) {
 }
 
 args.forEach(function(arg) {
-  files = files.concat(utils.lookupFiles(arg, extensions, program.recursive));
+  var newFiles;
+  try {
+    newFiles = utils.lookupFiles(arg, extensions, program.recursive);
+  } catch (err) {
+    if (err.message.indexOf('cannot resolve path') === 0) {
+      console.error('Warning: Could not find any test files matching pattern: ' + arg);
+      return;
+    }
+
+    throw err;
+  }
+
+  files = files.concat(newFiles);
 });
+
+if (!files.length) {
+  console.error('No test files found');
+  process.exit(1);
+}
 
 // resolve
 
@@ -384,7 +401,7 @@ if (program.watch) {
   process.on('SIGINT', function() {
     showCursor();
     console.log('\n');
-    process.exit();
+    process.exit(130);
   });
 
   var watchFiles = utils.files(cwd, [ 'js' ].concat(program.watchExtensions));
@@ -442,7 +459,7 @@ if (program.watch) {
 
 function exitLater(code) {
   process.on('exit', function() {
-    process.exit(code);
+    process.exit(Math.min(code, 255));
   });
 }
 
@@ -452,7 +469,7 @@ function exit(code) {
   // https://github.com/visionmedia/mocha/issues/333 has a good discussion
   function done() {
     if (!(draining--)) {
-      process.exit(code);
+      process.exit(Math.min(code, 255));
     }
   }
 
@@ -470,6 +487,11 @@ function exit(code) {
 
 process.on('SIGINT', function() {
   runner.abort();
+
+  // This is a hack:
+  // Instead of `process.exit(130)`, set runner.failures to 130 (exit code for SIGINT)
+  // The amount of failures will be emitted as error code later
+  runner.failures = 130;
 });
 
 /**
