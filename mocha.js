@@ -912,6 +912,8 @@ module.exports = function(suites, context, mocha) {
         if (typeof opts.fn === 'function') {
           opts.fn.call(suite);
           suites.shift();
+        } else if (typeof opts.fn === 'undefined' && !suite.pending) {
+          throw new Error('Suite "' + suite.fullTitle() + '" was defined but no callback was supplied. Supply a callback or explicitly skip the suite.');
         }
 
         return suite;
@@ -1076,7 +1078,8 @@ module.exports = function(suite) {
       }
       return common.suite.create({
         title: title,
-        file: file
+        file: file,
+        fn: false
       });
     };
 
@@ -1090,7 +1093,8 @@ module.exports = function(suite) {
       }
       return common.suite.only({
         title: title,
-        file: file
+        file: file,
+        fn: false
       });
     };
 
@@ -4168,7 +4172,7 @@ Runnable.prototype.enableTimeouts = function(enabled) {
  * @api public
  */
 Runnable.prototype.skip = function() {
-  throw new Pending();
+  throw new Pending('sync skip');
 };
 
 /**
@@ -4333,14 +4337,19 @@ Runnable.prototype.run = function(fn) {
   if (this.async) {
     this.resetTimeout();
 
+    // allows skip() to be used in an explicit async context
+    this.skip = function asyncSkip() {
+      done(new Pending('async skip call'));
+      // halt execution.  the Runnable will be marked pending
+      // by the previous call, and the uncaught handler will ignore
+      // the failure.
+      throw new Pending('async skip; aborting execution');
+    };
+
     if (this.allowUncaught) {
       return callFnAsync(this.fn);
     }
     try {
-      // allows skip() to be used in an explicit async context
-      this.skip = function() {
-        done(new Pending());
-      };
       callFnAsync(this.fn);
     } catch (err) {
       done(utils.getError(err));
@@ -4634,6 +4643,10 @@ Runner.prototype.checkGlobals = function(test) {
  * @param {Error} err
  */
 Runner.prototype.fail = function(test, err) {
+  if (test.isPending()) {
+    return;
+  }
+
   ++this.failures;
   test.state = 'failed';
 
@@ -4720,9 +4733,11 @@ Runner.prototype.hook = function(name, fn) {
           if (name === 'beforeEach' || name === 'afterEach') {
             self.test.pending = true;
           } else {
-            suite.tests.forEach(function(test) {
+            utils.forEach(suite.tests, function(test) {
               test.pending = true;
             });
+            // a pending hook won't be executed twice.
+            hook.pending = true;
           }
         } else {
           self.failHook(hook, err);
@@ -4828,6 +4843,9 @@ Runner.prototype.runTest = function(fn) {
   var self = this;
   var test = this.test;
 
+  if (!test) {
+    return;
+  }
   if (this.asyncOnly) {
     test.asyncOnly = true;
   }
@@ -5109,8 +5127,8 @@ Runner.prototype.uncaught = function(err) {
 
   runnable.clearTimeout();
 
-  // Ignore errors if complete
-  if (runnable.state) {
+  // Ignore errors if complete or pending
+  if (runnable.state || runnable.isPending()) {
     return;
   }
   this.fail(runnable, err);
@@ -5268,7 +5286,7 @@ function filterOnly(suite) {
   } else {
     // Otherwise, do not run any of the tests in this suite.
     suite.tests = [];
-    suite._onlySuites.forEach(function(onlySuite) {
+    utils.forEach(suite._onlySuites, function(onlySuite) {
       // If there are other `only` tests/suites nested in the current `only` suite, then filter that `only` suite.
       // Otherwise, all of the tests on this `only` suite should be run, so don't filter it.
       if (hasOnly(onlySuite)) {
@@ -5306,7 +5324,7 @@ function hasOnly(suite) {
 function filterLeaks(ok, globals) {
   return filter(globals, function(key) {
     // Firefox and Chrome exposes iframes as index inside the window object
-    if (/^d+/.test(key)) {
+    if (/^\d+/.test(key)) {
       return false;
     }
 
@@ -5868,7 +5886,8 @@ var basename = require('path').basename;
 var debug = require('debug')('mocha:watch');
 var exists = require('fs').existsSync || require('path').existsSync;
 var glob = require('glob');
-var join = require('path').join;
+var path = require('path');
+var join = path.join;
 var readdirSync = require('fs').readdirSync;
 var statSync = require('fs').statSync;
 var watchFile = require('fs').watchFile;
@@ -5948,7 +5967,7 @@ exports.map = function(arr, fn, scope) {
  * @param {number} start
  * @return {number}
  */
-exports.indexOf = function(arr, obj, start) {
+var indexOf = exports.indexOf = function(arr, obj, start) {
   for (var i = start || 0, l = arr.length; i < l; i++) {
     if (arr[i] === obj) {
       return i;
@@ -5966,7 +5985,7 @@ exports.indexOf = function(arr, obj, start) {
  * @param {Object} val Initial value.
  * @return {*}
  */
-exports.reduce = function(arr, fn, val) {
+var reduce = exports.reduce = function(arr, fn, val) {
   var rval = val;
 
   for (var i = 0, l = arr.length; i < l; i++) {
@@ -6172,7 +6191,7 @@ exports.trim = function(str) {
  * @return {Object}
  */
 exports.parseQuery = function(qs) {
-  return exports.reduce(qs.replace('?', '').split('&'), function(obj, pair) {
+  return reduce(qs.replace('?', '').split('&'), function(obj, pair) {
     var i = pair.indexOf('=');
     var key = pair.slice(0, i);
     var val = pair.slice(++i);
@@ -6225,13 +6244,11 @@ exports.highlightTags = function(name) {
  *
  * @api private
  * @param {*} value The value to inspect.
- * @param {string} [type] The type of the value, if known.
+ * @param {string} typeHint The type of the value
  * @returns {string}
  */
-function emptyRepresentation(value, type) {
-  type = type || exports.type(value);
-
-  switch (type) {
+function emptyRepresentation(value, typeHint) {
+  switch (typeHint) {
     case 'function':
       return '[Function]';
     case 'object':
@@ -6250,7 +6267,7 @@ function emptyRepresentation(value, type) {
  * @api private
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/toString
  * @param {*} value The value to test.
- * @returns {string}
+ * @returns {string} Computed type
  * @example
  * type({}) // 'object'
  * type([]) // 'array'
@@ -6262,8 +6279,9 @@ function emptyRepresentation(value, type) {
  * type(/foo/) // 'regexp'
  * type('type') // 'string'
  * type(global) // 'global'
+ * type(new String('foo') // 'object'
  */
-exports.type = function type(value) {
+var type = exports.type = function type(value) {
   if (value === undefined) {
     return 'undefined';
   } else if (value === null) {
@@ -6292,25 +6310,36 @@ exports.type = function type(value) {
  * @return {string}
  */
 exports.stringify = function(value) {
-  var type = exports.type(value);
+  var typeHint = type(value);
 
-  if (!~exports.indexOf(['object', 'array', 'function'], type)) {
-    if (type !== 'buffer') {
+  if (!~indexOf(['object', 'array', 'function'], typeHint)) {
+    if (typeHint === 'buffer') {
+      var json = value.toJSON();
+      // Based on the toJSON result
+      return jsonStringify(json.data && json.type ? json.data : json, 2)
+        .replace(/,(\n|$)/g, '$1');
+    }
+
+    // IE7/IE8 has a bizarre String constructor; needs to be coerced
+    // into an array and back to obj.
+    if (typeHint === 'string' && typeof value === 'object') {
+      value = reduce(value.split(''), function(acc, char, idx) {
+        acc[idx] = char;
+        return acc;
+      }, {});
+      typeHint = 'object';
+    } else {
       return jsonStringify(value);
     }
-    var json = value.toJSON();
-    // Based on the toJSON result
-    return jsonStringify(json.data && json.type ? json.data : json, 2)
-      .replace(/,(\n|$)/g, '$1');
   }
 
   for (var prop in value) {
     if (Object.prototype.hasOwnProperty.call(value, prop)) {
-      return jsonStringify(exports.canonicalize(value), 2).replace(/,(\n|$)/g, '$1');
+      return jsonStringify(exports.canonicalize(value, null, typeHint), 2).replace(/,(\n|$)/g, '$1');
     }
   }
 
-  return emptyRepresentation(value, type);
+  return emptyRepresentation(value, typeHint);
 };
 
 /**
@@ -6339,7 +6368,7 @@ function jsonStringify(object, spaces, depth) {
   }
 
   function _stringify(val) {
-    switch (exports.type(val)) {
+    switch (type(val)) {
       case 'null':
       case 'undefined':
         val = '[' + val + ']';
@@ -6422,14 +6451,15 @@ exports.isBuffer = function(value) {
  * @see {@link exports.stringify}
  * @param {*} value Thing to inspect.  May or may not have properties.
  * @param {Array} [stack=[]] Stack of seen values
+ * @param {string} [typeHint] Type hint
  * @return {(Object|Array|Function|string|undefined)}
  */
-exports.canonicalize = function(value, stack) {
+exports.canonicalize = function canonicalize(value, stack, typeHint) {
   var canonicalizedObj;
   /* eslint-disable no-unused-vars */
   var prop;
   /* eslint-enable no-unused-vars */
-  var type = exports.type(value);
+  typeHint = typeHint || type(value);
   function withStack(value, fn) {
     stack.push(value);
     fn();
@@ -6438,11 +6468,11 @@ exports.canonicalize = function(value, stack) {
 
   stack = stack || [];
 
-  if (exports.indexOf(stack, value) !== -1) {
+  if (indexOf(stack, value) !== -1) {
     return '[Circular]';
   }
 
-  switch (type) {
+  switch (typeHint) {
     case 'undefined':
     case 'buffer':
     case 'null':
@@ -6463,7 +6493,7 @@ exports.canonicalize = function(value, stack) {
       }
       /* eslint-enable guard-for-in */
       if (!canonicalizedObj) {
-        canonicalizedObj = emptyRepresentation(value, type);
+        canonicalizedObj = emptyRepresentation(value, typeHint);
         break;
       }
     /* falls through */
@@ -6579,16 +6609,20 @@ exports.getError = function(err) {
  */
 exports.stackTraceFilter = function() {
   // TODO: Replace with `process.browser`
-  var slash = '/';
   var is = typeof document === 'undefined' ? { node: true } : { browser: true };
-  var cwd = is.node
-      ? process.cwd() + slash
-      : (typeof location === 'undefined' ? window.location : location).href.replace(/\/[^\/]*$/, '/');
+  var slash = path.sep;
+  var cwd;
+  if (is.node) {
+    cwd = process.cwd() + slash;
+  } else {
+    cwd = (typeof location === 'undefined' ? window.location : location).href.replace(/\/[^\/]*$/, '/');
+    slash = '/';
+  }
 
   function isMochaInternal(line) {
     return (~line.indexOf('node_modules' + slash + 'mocha' + slash))
-      || (~line.indexOf('components' + slash + 'mochajs' + slash))
-      || (~line.indexOf('components' + slash + 'mocha' + slash))
+      || (~line.indexOf('node_modules' + slash + 'mocha.js'))
+      || (~line.indexOf('bower_components' + slash + 'mocha.js'))
       || (~line.indexOf(slash + 'mocha.js'));
   }
 
@@ -6604,7 +6638,7 @@ exports.stackTraceFilter = function() {
   return function(stack) {
     stack = stack.split('\n');
 
-    stack = exports.reduce(stack, function(list, line) {
+    stack = reduce(stack, function(list, line) {
       if (isMochaInternal(line)) {
         return list;
       }
