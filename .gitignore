@@ -11,3 +11,5 @@ npm-debug.log*
 .karma/
 *.orig
 .nyc_output/
+coverage/
+BUILDTMP/
